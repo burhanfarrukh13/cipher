@@ -1,0 +1,24 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+python-dotenv==1.0.1
+httpx==0.27.2
+pydantic>=2.11
+
+# Windows-only, used by skills/pc_control.py for volume control
+pycaw==20240210; sys_platform == 'win32'
+comtypes==1.4.16; sys_platform == 'win32'  # >=1.4.8 required for Python 3.13
+
+# Used by skills/face_auth.py for offline face recognition (needs the
+# 'contrib' build for cv2.face.* — don't also install plain opencv-python)
+opencv-contrib-python==4.10.0.84
+numpy>=2.5.2
+
+# Used by skills/web_search.py for free, keyless web search results
+ddgs==9.0.0
+
+# Local screen capture and gated mouse/keyboard control
+Pillow>=10.4.0
+pyautogui>=0.9.54
+pyperclip>=1.9.0
+pywinauto>=0.6.8; sys_platform == 'win32'
+playwright>=1.50,<2

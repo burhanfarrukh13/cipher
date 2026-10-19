@@ -1,0 +1,14 @@
+# Environment files (contains sensitive API keys and secrets)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Keep actual environment backups or variations hidden
+.env.dev
+.env.test
+.env.prod
+
+# Allow tracking for the template file (safe example configurations)
+!.env.example

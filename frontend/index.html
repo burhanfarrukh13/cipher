@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cipher</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2e38;
+    --text: #e8e9ec; --muted: #8a8f9a; --accent: #5a8dee;
+    --warn: #e5a23a; --err: #e35a5a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); display: flex; height: 100vh;
+  }
+  .panel { display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .chat { flex: 2; }
+  .tasks { flex: 1; border-right: none; }
+  h2 { padding: 16px; margin: 0; border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  h2 .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--warn); color: #000; font-weight: 700; letter-spacing: 0.5px; }
+  h2 .badge.off { background: var(--border); color: var(--muted); }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; }
+  .msg { margin-bottom: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { color: var(--accent); }
+  .msg.user::before { content: "You: "; opacity: .6; }
+  .msg.assistant::before { content: "Cipher: "; opacity: .6; }
+  .msg.tool { color: var(--muted); font-size: 12px; font-style: italic; }
+  .msg.tool::before { content: "› "; opacity: .6; }
+  .msg.error { color: var(--err); }
+  .msg.error::before { content: "Cipher: "; opacity: .6; }
+  .input-row { display: flex; padding: 12px; border-top: 1px solid var(--border); gap: 8px; }
+  input[type=text] {
+    flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: 8px; font-size: 14px;
+  }
+  button {
+    background: var(--accent); color: white; border: none; padding: 10px 16px;
+    border-radius: 8px; cursor: pointer; font-size: 14px;
+  }
+  button:hover { opacity: .9; }
+  #micBtn { background: var(--panel); border: 1px solid var(--border); }
+  #micBtn.listening { background: var(--err); border-color: var(--err); }
+  #speakBtn { background: var(--panel); border: 1px solid var(--border); }
+  #speakBtn.muted { opacity: .4; }
+  .task-list { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  .task { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .task.done { opacity: .4; text-decoration: line-through; }
+  .task span { flex: 1; }
+  .task button { background: transparent; color: var(--muted); padding: 4px 8px; font-size: 12px; }
+  .status { padding: 8px 16px; font-size: 12px; color: var(--muted); }
+  .screen-tools { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  .screen-tools button { width: 100%; font-size: 12px; padding: 8px; }
+  #screenState { color: var(--muted); font-size: 11px; margin-top: 6px; min-height: 14px; }
+  #screenPreview { display: none; width: 100%; max-height: 240px; object-fit: contain; background: #000; margin-top: 8px; border-radius: 4px; }
+
+  #lockOverlay {
+    position: fixed; inset: 0; background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; z-index: 1000; text-align: center; padding: 24px;
+  }
+  #lockOverlay .lockIcon { font-size: 40px; }
+  #lockOverlay .lockMessage { font-size: 15px; color: var(--muted); max-width: 360px; line-height: 1.5; }
+  #lockOverlay button { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div id="lockOverlay">
+  <div class="lockIcon">🔒</div>
+  <div class="lockMessage" id="lockMessage">Checking who's there...</div>
+  <button id="retryBtn" onclick="attemptUnlock()" style="display:none">Try Again</button>
+</div>
+
+<div class="panel chat">
+  <h2>Cipher <span id="modeBadge" class="badge off">UNRESTRICTED</span></h2>
+  <div class="messages" id="messages"></div>
+  <div class="input-row">
+    <input type="text" id="chatInput" placeholder="Ask Cipher anything..." onkeydown="if(event.key==='Enter')sendChat()">
+    <button id="micBtn" onclick="toggleMic()" title="Speak instead of typing">🎤</button>
+    <button id="speakBtn" onclick="toggleSpeak()" title="Toggle spoken replies">🔊</button>
+    <button onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<div class="panel tasks">
+  <h2>Tasks</h2>
+  <div class="status" id="status"></div>
+  <div class="screen-tools">
+    <button id="screenBtn" onclick="toggleScreenStream()">👁 See my screen continuously</button>
+    <div id="screenState">Screen sharing is off</div>
+    <img id="screenPreview" alt="Current screen preview">
+  </div>
+  <div class="task-list" id="taskList"></div>
+  <div class="input-row">
+    <input type="text" id="taskInput" placeholder="New task..." onkeydown="if(event.key==='Enter')addTask()">
+    <button onclick="addTask()">Add</button>
+  </div>
+</div>
+
+<script>
+const API = "http://localhost:8000";
+let history = [];
+let userLocation = "";
+let userArea = "";
+let userStreet = "";
+let userLat = null;
+let userLon = null;
+let unrestrictedMode = false;
+
+// --- Location (used for weather, "where am I", and "near me" lookups) ---
+function initLocation() {
+  if (!("geolocation" in navigator)) return;
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const { latitude, longitude } = pos.coords;
+    userLat = latitude;
+    userLon = longitude;
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
+        { headers: { "Accept-Language": "en" } }
+      );
+      const data = await res.json();
+      const addr = data.address || {};
+      const city = addr.city || addr.town || addr.village || addr.municipality || "";
+      userLocation = [city, addr.state, addr.country].filter(Boolean).join(", ");
+      userArea = addr.suburb || addr.neighbourhood || addr.city_district || addr.borough || "";
+      userStreet = [addr.house_number, addr.road].filter(Boolean).join(" ").trim();
+    } catch {
+      userLocation = `${latitude.toFixed(3)}, ${longitude.toFixed(3)}`;
+      userArea = "";
+      userStreet = "";
+    }
+  }, () => {}, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+}
+
+async function sendChat() {
+  if (window.chatRequestInFlight) return;
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  window.chatRequestInFlight = true;
+  input.value = "";
+  appendMessage("user", text);
+  history.push({ role: "user", content: text });
+
+  // Show a "thinking" placeholder so the user sees something is happening
+  // (web search + Ollama can take a few seconds, especially first call).
+  const thinkingEl = appendMessage("tool", "thinking…");
+
+  try {
+    const res = await fetch(`${API}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: text, history: history.slice(0, -1),
+        location: userLocation, area: userArea, street: userStreet,
+        lat: userLat, lon: userLon
+      })
+    });
+    const data = await res.json();
+
+    if (data.locked) {
+      showLockOverlay(data.reply || "Locked. Say \"who am I\" while looking at the camera to unlock.");
+      return;
+    }
+
+    if (data.mode === "unrestricted") {
+      unrestrictedMode = true;
+      updateModeBadge();
+    } else if (data.mode === "restricted") {
+      unrestrictedMode = false;
+      updateModeBadge();
+    }
+
+    if (data.tool_log && data.tool_log.length) {
+      for (const entry of data.tool_log) {
+        appendMessage("tool", entry);
+      }
+    }
+
+    if (data.reply) {
+      const reply = cleanAssistantReply(data.reply);
+      appendMessage("assistant", reply);
+      history.push({ role: "assistant", content: reply });
+      speak(reply);
+    } else {
+      appendMessage("error", data.detail || "Something went wrong.");
+    }
+  } catch (error) {
+    appendMessage("error", `Request failed: ${error.message || error}`);
+  } finally {
+    thinkingEl.remove();
+    window.chatRequestInFlight = false;
+  }
+}
+
+function updateModeBadge() {
+  const badge = document.getElementById("modeBadge");
+  if (unrestrictedMode) {
+    badge.style.display = "inline-block";
+    badge.classList.remove("off");
+  } else {
+    badge.style.display = "none";
+    badge.classList.add("off");
+  }
+}
+
+function appendMessage(role, text) {
+  const el = document.createElement("div");
+  el.className = `msg ${role}`;
+  el.textContent = text;
+  const box = document.getElementById("messages");
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+  return el;
+}
+
+async function loadTasks() {
+  const res = await fetch(`${API}/tasks`);
+  const tasks = await res.json();
+  const list = document.getElementById("taskList");
+  list.innerHTML = "";
+  tasks.forEach(t => {
+    const row = document.createElement("div");
+    row.className = "task" + (t.done ? " done" : "");
+    row.innerHTML = `<span>${t.title}</span>`;
+    if (!t.done) {
+      const doneBtn = document.createElement("button");
+      doneBtn.textContent = "done";
+      doneBtn.onclick = async () => { await fetch(`${API}/tasks/${t.id}/complete`, { method: "POST" }); loadTasks(); };
+      row.appendChild(doneBtn);
+    }
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "x";
+    delBtn.onclick = async () => { await fetch(`${API}/tasks/${t.id}`, { method: "DELETE" }); loadTasks(); };
+    row.appendChild(delBtn);
+    list.appendChild(row);
+  });
+}
+
+async function addTask() {
+  const input = document.getElementById("taskInput");
+  const title = input.value.trim();
+  if (!title) return;
+  input.value = "";
+  await fetch(`${API}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title })
+  });
+  loadTasks();
+}
+
+async function showScreen() {
+  const preview = document.getElementById("screenPreview");
+  try {
+    const res = await fetch(`${API}/screen/screenshot`);
+    if (!res.ok) throw new Error((await res.json()).detail || "Screen capture failed");
+    const blob = await res.blob();
+    if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url);
+    preview.dataset.url = URL.createObjectURL(blob);
+    preview.src = preview.dataset.url;
+    preview.style.display = "block";
+  } catch (error) {
+    appendMessage("error", error.message);
+  }
+}
+
+function toggleScreenStream() {
+    const preview = document.getElementById("screenPreview");
+    const button = document.getElementById("screenBtn");
+    const state = document.getElementById("screenState");
+    if (preview.dataset.streaming === "true") {
+      preview.removeAttribute("src");
+      preview.dataset.streaming = "false";
+      preview.style.display = "none";
+      button.textContent = "👁 See my screen continuously";
+      state.textContent = "Screen sharing is off";
+      return;
+    }
+    state.textContent = "Starting screen sharing…";
+    preview.onload = () => { state.textContent = "● Screen sharing active (live)"; };
+    preview.onerror = () => {
+      preview.dataset.streaming = "false";
+      preview.style.display = "none";
+      button.textContent = "👁 See my screen continuously";
+      state.textContent = "Screen sharing failed. Check that the backend is running.";
+    };
+    preview.src = `${API}/screen/stream?ts=${Date.now()}`;
+    preview.dataset.streaming = "true";
+    preview.style.display = "block";
+    button.textContent = "⏹ Stop screen view";
+}
+
+async function checkStatus() {
+  try {
+    const res = await fetch(`${API}/health`);
+    const data = await res.json();
+    const parts = [];
+    parts.push(data.smart_home_configured ? "Smart home: connected" : "Smart home: not configured");
+    parts.push(data.unrestricted_unlocked ? "Mode: UNRESTRICTED" : "Mode: safe (whitelist only)");
+    document.getElementById("status").textContent = parts.join(" — ");
+    if (data.unrestricted_unlocked) {
+      unrestrictedMode = true;
+      updateModeBadge();
+    } else {
+      unrestrictedMode = false;
+      updateModeBadge();
+    }
+  } catch {
+    document.getElementById("status").textContent = "Backend not running — start it with uvicorn (see README)";
+  }
+}
+
+loadTasks();
+checkStatus();
+initFaceGate();
+initLocation();
+
+setInterval(checkStatus, 30000);
+
+// --- Face-recognition gate ---
+async function initFaceGate() {
+  let status;
+  try {
+    const res = await fetch(`${API}/face/status`);
+    status = await res.json();
+  } catch {
+    hideLockOverlay();
+    return;
+  }
+  if (!status.lock_active) {
+    hideLockOverlay();
+    return;
+  }
+  await attemptUnlock();
+}
+
+async function attemptUnlock() {
+  document.getElementById("retryBtn").style.display = "none";
+  setLockMessage("Scanning your face...");
+  try {
+    const res = await fetch(`${API}/face/verify`, { method: "POST" });
+    const data = await res.json();
+    if (data.recognized) {
+      setLockMessage(`Welcome back, ${data.name}.`);
+      setTimeout(hideLockOverlay, 500);
+      return;
+    }
+    setLockMessage(data.error || "Face not recognized. Access denied.");
+  } catch {
+    setLockMessage("Couldn't reach the backend to verify. Is uvicorn running?");
+  }
+  document.getElementById("retryBtn").style.display = "inline-block";
+}
+
+function setLockMessage(text) {
+  document.getElementById("lockMessage").textContent = text;
+}
+
+function hideLockOverlay() {
+  document.getElementById("lockOverlay").style.display = "none";
+}
+
+function showLockOverlay(message) {
+  document.getElementById("lockOverlay").style.display = "flex";
+  setLockMessage(message);
+  document.getElementById("retryBtn").style.display = "inline-block";
+}
+
+setInterval(async () => {
+  if (document.getElementById("lockOverlay").style.display === "flex") return;
+  try {
+    const res = await fetch(`${API}/face/status`);
+    const status = await res.json();
+    if (status.lock_active && !status.verified) {
+      showLockOverlay("Locked due to inactivity. Say \"who am I\" or click below to unlock.");
+    }
+  } catch {}
+}, 60000);
+
+// --- Voice input (Chrome's built-in speech recognition) ---
+let recognition = null;
+let listening = false;
+
+function toggleMic() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert("Voice input isn't supported in this browser. Use Chrome or Edge.");
+    return;
+  }
+  if (listening) {
+    recognition.stop();
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = () => {
+    listening = true;
+    document.getElementById("micBtn").classList.add("listening");
+  };
+  recognition.onend = () => {
+    listening = false;
+    document.getElementById("micBtn").classList.remove("listening");
+  };
+  recognition.onerror = (e) => {
+    console.error("Speech recognition error:", e.error);
+    if (e.error === "not-allowed") {
+      alert("Mic access blocked. Try using Chrome or Edge over localhost.");
+    }
+  };
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    document.getElementById("chatInput").value = transcript;
+    sendChat();
+  };
+  recognition.start();
+}
+
+// --- Voice output (browser TTS only) ---
+let speakEnabled = true;
+
+function toggleSpeak() {
+  speakEnabled = !speakEnabled;
+  document.getElementById("speakBtn").classList.toggle("muted", !speakEnabled);
+  if (!speakEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+function cleanAssistantReply(text) {
+  let cleaned = String(text || "");
+  cleaned = cleaned
+    .replace(/```(?:computer|powershell|pwsh|json)?[\s\S]*?```/gi, "")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1")
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/[`*_~]/g, "")
+    .replace(/\b(?:see|visit|source)\s*$/i, "")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned || "Done.";
+}
+
+function speechText(text) {
+  let spoken = cleanAssistantReply(text)
+    .replace(/\b(tool log|computer action results?|unrestricted mode)\s*:/gi, "")
+    .replace(/[{}[\]<>]/g, " ")
+    .replace(/["']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return spoken.length > 1200 ? `${spoken.slice(0, 1197)}...` : spoken;
+}
+
+function speak(text) {
+  if (!speakEnabled || !text) return;
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const spoken = speechText(text);
+  if (!spoken) return;
+  const u = new SpeechSynthesisUtterance(spoken);
+  u.rate = 0.95;
+  u.pitch = 1.0;
+  const speakBtn = document.getElementById("speakBtn");
+  u.onstart = () => speakBtn.classList.add("speaking");
+  u.onend = () => speakBtn.classList.remove("speaking");
+  u.onerror = () => speakBtn.classList.remove("speaking");
+  window.speechSynthesis.speak(u);
+}
+</script>
+
+</body>
+</html>
